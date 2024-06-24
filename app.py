@@ -1,54 +1,43 @@
-### Building the Streamlit App
 import streamlit as st
 import duckdb
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import cosine_similarity
 
-st.title("Recipe Finder")
-st.write("Enter the ingredients you have at home, and we'll show you possible recipes.")
+# Connect to DuckDB
+con = duckdb.connect('recipes.duckdb')
 
-user_ingredients = st.text_input("Enter ingredients separated by commas (e.g., tomato, cheese, pasta):")
+# Load data
+df = con.execute("SELECT * FROM recipes").df()
 
-@st.cache(hash_funcs={duckdb.DuckDBPyConnection: lambda _: None, KMeans: lambda _: None})
-def load_and_cluster_data():
-    con = duckdb.connect('recipes.duckdb')
-    recipes_df = con.execute("SELECT * FROM recipes").fetchdf()
+# Vectorize ingredients
+vectorizer = TfidfVectorizer()
+X = vectorizer.fit_transform(df['ingredients'])
 
-    # Combine all ingredients into a single string per recipe
-    recipes_df['all_ingredients'] = recipes_df['ingredients'].apply(lambda x: ' '.join(eval(x)))
+def recommend_recipes(user_ingredients):
+    # Vectorize user input
+    user_vector = vectorizer.transform([' '.join(user_ingredients)])
+    # Compute cosine similarity
+    similarities = cosine_similarity(user_vector, X)
+    # Get top 5 similar recipes
+    top_indices = similarities.argsort()[0, -5:][::-1]
+    return df.iloc[top_indices]
 
-    # Vectorize the ingredients
-    vectorizer = TfidfVectorizer(stop_words='english')
-    X = vectorizer.fit_transform(recipes_df['all_ingredients'])
+# Streamlit app
+st.title("Recipe Recommender")
 
-    # Perform KMeans clustering
-    kmeans = KMeans(n_clusters=10, random_state=42)
-    recipes_df['cluster'] = kmeans.fit_predict(X)
+# User input
+user_ingredients = st.text_input("Enter ingredients (comma separated)").split(',')
 
-    return recipes_df, vectorizer, kmeans
-
-#recipes_df, vectorizer, kmeans = load_and_cluster_data()
-
-def find_recipes(user_ingredients, recipes_df, vectorizer, kmeans):
-    user_ingredients_list = [ingredient.strip().lower() for ingredient in user_ingredients.split(',')]
-    user_ingredients_str = ' '.join(user_ingredients_list)
-
-    user_vector = vectorizer.transform([user_ingredients_str])
-    user_cluster = kmeans.predict(user_vector)[0]
-
-    possible_recipes = recipes_df[recipes_df['cluster'] == user_cluster]
-
-    return possible_recipes['title'].tolist()
-
-if st.button("Find Recipes"):
+if st.button("Recommend"):
     if user_ingredients:
-        possible_recipes = find_recipes(user_ingredients, recipes_df, vectorizer, kmeans)
-        if possible_recipes:
-            st.write("Here are some recipes you can make:")
-            for recipe in possible_recipes:
-                st.write(f"- {recipe}")
-        else:
-            st.write("No recipes found with the given ingredients.")
+        user_ingredients = [ingredient.strip() for ingredient in user_ingredients]
+        recommendations = recommend_recipes(user_ingredients)
+        st.write("Top recipe recommendations:")
+        for idx, row in recommendations.iterrows():
+            st.write(f"{row['title']} - {row['description']}")
     else:
         st.write("Please enter some ingredients.")
+
+
+
